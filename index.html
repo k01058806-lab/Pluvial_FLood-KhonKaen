@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>น้ำท่วมสูงสุด ขอนแก่น · แบบจำลอง 1D–2D · ฝนออกแบบ SSP2-4.5</title>
+<link rel="stylesheet" href="common.css">
+<style>#view{bottom:12px}</style>
+</head>
+<body>
+<div id="map"></div>
+
+<aside id="side" class="panel">
+  <button id="toggle" title="ย่อ/ขยาย">☰</button>
+  <h1>น้ำท่วมสูงสุด เมืองขอนแก่น</h1>
+  <div class="sub">แบบจำลองควบคู่ 1D–2D (Drainage 1D2D FV2) · ตัดตามขอบเขต 5 ตำบล · <a class="lnk" href="anim.html">ดูแอนิเมชัน 22 ก.ย. 2568 →</a></div>
+
+  <div class="seg" id="lay"><button data-l="surf" class="on">น้ำผิวดิน (surf)</button><button data-l="pipe">น้ำในท่อ (pipe)</button></div>
+
+  <h2>เลือกกรณี</h2>
+  <div id="cases"></div>
+
+  <h2 id="caseTitle">ผลน้ำท่วม</h2>
+  <div class="kpis" id="kpis"></div>
+
+  <h2>เทียบทุกกรณี</h2>
+  <table>
+    <thead><tr><th>กรณี</th><th>ฝน มม./วัน</th><th id="th1">ท่วม ตร.กม.</th><th class="barcell"></th></tr></thead>
+    <tbody id="cTab"></tbody>
+  </table>
+  <div class="note">ฝนออกแบบรายวันจากการวิเคราะห์ Gumbel ของ IPSL-CM6A-LR ฉากทัศน์ SSP2-4.5 · กระจายเป็นรายชั่วโมงตามรูปแบบฝน 22 ก.ย. 2568 (8 ชม.) ·
+    พื้นที่ท่วมนับเซลล์ที่ลึกตั้งแต่ 0.10 ม. · น้ำในท่อ = ระดับน้ำสูงสุดเหนือท้องท่อ (เกินความสูงท่อ = ท่อเต็ม มีแรงดัน) · จุดแดง = จุดระบายออก</div>
+</aside>
+
+<div id="cbar" class="panel">
+  <div class="t" id="cbt" data-surf="ความลึกน้ำท่วมสูงสุดบนผิวดิน (ม.)" data-pipe="ระดับน้ำสูงสุดเหนือท้องท่อ (ม.)">–</div>
+  <div class="sw" id="cbsw"></div>
+  <div class="lb" id="cblb"></div>
+</div>
+
+<div id="view" class="panel">
+  <button id="v3d" class="on" title="สลับมุมมอง 3D / 2D">3D</button>
+  <button id="rot" title="หมุนกล้องอัตโนมัติ">⟳ หมุน</button>
+  <label title="ความสูงของผิวน้ำเทียบความลึกจริง">ความสูงน้ำ <input id="hs" type="range" min="1" max="10" value="3" style="width:70px"> <span id="hsv">3×</span></label>
+  <label><input id="tOn" type="checkbox" checked> ขอบเขตตำบล</label>
+  <label>ทึบ <input id="opa" type="range" min="10" max="100" value="80" style="width:60px"></label>
+  <button id="home" title="กลับมุมมองเริ่มต้น">⌂</button>
+  <div class="hint">หมุน/เอียง: คลิกขวาลาก หรือ Ctrl+ลาก · มือถือ: สองนิ้ว · ปุ่มลูกศร = เปลี่ยนกรณี</div>
+</div>
+<div id="labels"></div>
+<div id="msg"></div>
+
+<script src="scenarios.js"></script>
+<script src="tambon.js"></script>
+<script src="pipe_geom.js"></script>
+<script src="common.js"></script>
+<script>
+(function(){
+const {st,$,fmt,msg,style,pipeFC,EMPTY} = window.KK;
+const S = window.SCENARIOS, byId = Object.fromEntries(S.cases.map(c=>[c.id,c]));
+const order = ['event','100H','100N','100F','500H','500N','500F','1000H','1000N','1000F'];
+let cur = 'event'; const vecCache = {};
+
+/* ---------- ปุ่มกรณี: แถว = คาบการเกิด, คอลัมน์ = ช่วงปี ---------- */
+let h = `<button data-id="event" class="ev">เหตุการณ์จริง 22 ก.ย. 2568<small>ฝน 56.6 มม. · ใช้ปรับเทียบ</small></button>`;
+h += `<div></div><div class="hd">อดีต<br>1981–2014</div><div class="hd">อนาคต<br>2041–2060</div><div class="hd">อนาคต<br>2071–2090</div>`;
+['100','500','1000'].forEach(rp=>{ h += `<div class="rp">${fmt(+rp)} ปี</div>`;
+  [...'HNF'].forEach(p=>{ const c=byId[rp+p]; h += `<button data-id="${rp+p}" class="${c.available?'':'na'}">${fmt(c.rain,1)}<small>มม./วัน</small></button>`; }); });
+$('cases').innerHTML = h;
+document.querySelectorAll('#cases button').forEach(b=>b.onclick=()=>select(b.dataset.id));
+
+function kpi(l,v,u,d,w){ return `<div class="kpi${w?' wide':''}"><div class="l">${l}</div><div class="v">${fmt(v,d)} <small>${u}</small></div></div>`; }
+function fill(){
+  const c = byId[cur], surf = st.layer==='surf';
+  document.querySelectorAll('#cases button').forEach(b=>b.classList.toggle('on',b.dataset.id===cur));
+  $('caseTitle').textContent = (surf?'น้ำผิวดิน · ':'น้ำในท่อ · ') + c.label;
+  const s = c.stats||{}, p = c.pstats||{};
+  $('kpis').innerHTML = kpi('ฝนรายวัน', c.rain, 'มม.', 1, true) + (surf
+    ? kpi('พื้นที่ท่วม (≥ 0.10 ม.)', s.wet,'ตร.กม.',1) + kpi('ลึกสุด', s.max,'ม.',2) + kpi('ลึก ≥ 0.5 ม.', s.wet50,'ตร.กม.',1)
+      + kpi('ลึก ≥ 1.0 ม.', s.wet100,'ตร.กม.',1) + kpi('ลึกเฉลี่ย', s.mean,'ม.',2) + kpi('ปริมาตรน้ำท่วม', s.vol,'ล้าน ลบ.ม.',1)
+    : kpi('น้ำในท่อเฉลี่ย', p.pmean,'ม.',2) + kpi('สูงสุด', p.pmax,'ม.',2) + kpi('เซลล์ท่อ > 2 ม.', p.p2,'%',1)
+      + kpi('เซลล์ท่อ > 3 ม.', p.p3,'%',1));
+  $('th1').textContent = surf ? 'ท่วม ตร.กม.' : 'ท่อ > 2 ม. %';
+  const val = c2 => surf ? (c2.stats||{}).wet : (c2.pstats||{}).p2;
+  const mx = Math.max(...order.map(id=>val(byId[id])||0));
+  $('cTab').innerHTML = order.map(id=>{ const c2=byId[id], v=val(c2);
+    const name = id==='event' ? '22 ก.ย. 2568' : `${fmt(+c2.rp)} ปี · ${({H:'อดีต',N:'2041–60',F:'2071–90'})[c2.per]}`;
+    return `<tr data-id="${id}" class="${id===cur?'hl':''}"><td>${name}</td><td>${fmt(c2.rain,1)}</td><td>${fmt(v,1)}</td>`+
+      `<td class="barcell"><div class="rbar${surf?'':' p'}" style="width:${100*(v||0)/mx}%"></div></td></tr>`; }).join('');
+}
+$('cTab').addEventListener('click',e=>{ const tr=e.target.closest('tr'); if(tr) select(tr.dataset.id); });
+
+function loadVec(id){
+  return new Promise((ok,no)=>{
+    if(vecCache[id]) return ok(vecCache[id]);
+    const t=document.createElement('script'); t.src='vec/surf_'+id+'.js';
+    t.onload=()=> (window.FLOOD_VEC&&window.FLOOD_VEC[id]) ? ok(vecCache[id]=window.FLOOD_VEC[id]) : no('ไฟล์ว่าง');
+    t.onerror=()=>no('ไม่พบ vec/surf_'+id+'.js');
+    document.head.appendChild(t);
+  });
+}
+function show(){
+  const R = st.R; if(!R || !R.getSource('flood')) return;
+  const c = byId[cur];
+  R.getSource('pipe').setData(pipeFC(S.pipe[cur]||null));
+  if(!c.available){ R.getSource('flood').setData(EMPTY); return; }
+  msg('กำลังโหลดแผนที่น้ำท่วม…');
+  loadVec(cur).then(fc=>{ if(cur!==c.id) return; R.getSource('flood').setData(fc); msg(''); }).catch(e=>msg('โหลดไม่ได้: '+e));
+}
+function select(id){ cur=id; fill(); show(); }
+st.onReady = show; st.onLayer = fill;
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'&&e.target.type!=='range') return;
+  const i=order.indexOf(cur);
+  if(e.key==='ArrowRight'||e.key==='ArrowDown'){e.preventDefault(); select(order[(i+1)%order.length]);}
+  if(e.key==='ArrowLeft'||e.key==='ArrowUp'){e.preventDefault(); select(order[(i-1+order.length)%order.length]);}
+});
+fill();
+})();
+</script>
+</body>
+</html>
