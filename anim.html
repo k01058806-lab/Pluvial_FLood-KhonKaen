@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>แอนิเมชันน้ำท่วม ขอนแก่น 22 ก.ย. 2568 · แบบจำลอง 1D–2D</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  #view{top:96px}
+  #tbar{bottom:12px;left:calc(50% + var(--side)/2 + 6px);transform:translateX(-50%);width:min(760px,calc(100vw - var(--side) - 60px));padding:10px 14px;box-sizing:border-box}
+  #tbar .row{display:flex;align-items:center;gap:10px}
+  #tlabel{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;min-width:170px}
+  #tbar input[type=range]{flex:1}
+  #tbar select{background:#1d2b44;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:5px}
+  #play{width:44px;font-size:16px}
+  #spark{width:100%;height:80px;display:block;margin-top:6px;cursor:pointer}
+  #msg{bottom:96px}
+  @media (max-width:760px){ #tbar{left:12px;right:12px;width:auto;transform:none} #tlabel{min-width:0;font-size:14px} }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<aside id="side" class="panel">
+  <button id="toggle" title="ย่อ/ขยาย">☰</button>
+  <h1>แอนิเมชันน้ำท่วม ขอนแก่น 22 ก.ย. 2568</h1>
+  <div class="sub">แบบจำลองควบคู่ 1D–2D · ฝนจริงสถานี WEI052 56.6 มม. · เริ่มจำลอง 12:00 น. · <a class="lnk" href="index.html">ดูน้ำท่วมสูงสุดทุกกรณี →</a></div>
+
+  <div class="seg" id="lay"><button data-l="surf" class="on">น้ำผิวดิน (surf)</button><button data-l="pipe">น้ำในท่อ (pipe)</button></div>
+
+  <h2 id="caseTitle">ผลรายช่วงเวลา</h2>
+  <div class="kpis" id="kpis"></div>
+  <canvas id="spark" title="คลิกเพื่อไปยังเวลานั้น"></canvas>
+
+  <div class="note">เฟรมทุก 30 นาทีถึง 20:00 น. ทุกชั่วโมงถึงเที่ยงคืน แล้วทุก 3 ชั่วโมงถึง 25 ก.ย. 12:00 น. ·
+    พื้นที่ท่วมนับเซลล์ที่ลึกตั้งแต่ 0.10 ม. ใน 5 ตำบล · แบบจำลองไม่คิดการซึม น้ำในแอ่งจึงค้างนาน ·
+    น้ำในท่อ = ระดับน้ำเหนือท้องท่อ · จุดแดง = จุดระบายออก</div>
+</aside>
+
+<div id="cbar" class="panel">
+  <div class="t" id="cbt" data-surf="ความลึกน้ำบนผิวดิน (ม.)" data-pipe="ระดับน้ำเหนือท้องท่อ (ม.)">–</div>
+  <div class="sw" id="cbsw"></div>
+  <div class="lb" id="cblb"></div>
+</div>
+
+<div id="view" class="panel">
+  <button id="v3d" class="on" title="สลับมุมมอง 3D / 2D">3D</button>
+  <button id="rot" title="หมุนกล้องอัตโนมัติ">⟳ หมุน</button>
+  <label title="ความสูงของผิวน้ำเทียบความลึกจริง">ความสูงน้ำ <input id="hs" type="range" min="1" max="10" value="3" style="width:70px"> <span id="hsv">3×</span></label>
+  <label><input id="tOn" type="checkbox" checked> ขอบเขตตำบล</label>
+  <label>ทึบ <input id="opa" type="range" min="10" max="100" value="80" style="width:60px"></label>
+  <button id="home" title="กลับมุมมองเริ่มต้น">⌂</button>
+  <div class="hint">Space = เล่น/หยุด · ← → = ทีละเฟรม · หมุน/เอียง: คลิกขวาลาก หรือ Ctrl+ลาก</div>
+</div>
+<div id="tbar" class="panel">
+  <div class="row">
+    <button id="prev" title="ย้อน 1 เฟรม">⏮</button>
+    <button id="play" title="เล่น/หยุด (Space)">▶</button>
+    <button id="next" title="ถัดไป 1 เฟรม">⏭</button>
+    <div id="tlabel">–</div>
+    <input id="time" type="range" min="0" max="0" step="1" value="0">
+    <select id="speed" title="ความเร็ว"><option value="1600">ช้า</option><option value="900" selected>ปกติ</option><option value="450">เร็ว</option></select>
+    <label title="วนซ้ำ"><input id="loop" type="checkbox" checked> วน</label>
+  </div>
+</div>
+<div id="labels"></div>
+<div id="msg"></div>
+
+<script src="scenarios.js"></script>
+<script src="tambon.js"></script>
+<script src="pipe_geom.js"></script>
+<script src="anim_event.js"></script>
+<script src="common.js"></script>
+<script>
+(function(){
+const {st,$,fmt,msg,pipeFC,EMPTY} = window.KK;
+const A = window.ANIM.event, F = A.frames;
+const frameCache = new Map(); let fi = 0, playing = false, timer = null, reqId = 0;
+$('time').max = F.length-1;
+
+const TH_M=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+function thTime(t){ const [d,h]=t.split(' '); const [y,m,dd]=d.split('-').map(Number); return `${dd} ${TH_M[m-1]} ${y+543} ${h} น.`; }
+function kpi(l,v,u,d,w){ return `<div class="kpi${w?' wide':''}"><div class="l">${l}</div><div class="v">${fmt(v,d)} <small>${u}</small></div></div>`; }
+function fill(){
+  const f = F[fi], surf = st.layer==='surf';
+  $('caseTitle').textContent = surf ? 'น้ำผิวดิน · รายช่วงเวลา' : 'น้ำในท่อ · รายช่วงเวลา';
+  $('kpis').innerHTML = kpi('เวลา', null, '', 0, true).replace('–', thTime(f.time)) + (surf
+    ? kpi('พื้นที่ท่วม (≥ 0.10 ม.)', f.wet,'ตร.กม.',1) + kpi('ลึกสุด', f.max,'ม.',2) + kpi('ลึก ≥ 0.5 ม.', f.wet50,'ตร.กม.',1) + kpi('ลึก ≥ 1.0 ม.', f.wet100,'ตร.กม.',1)
+    : kpi('น้ำในท่อเฉลี่ย', f.pmean,'ม.',2) + kpi('สูงสุด', f.pmax,'ม.',2) + kpi('เซลล์ท่อ > 2 ม.', f.p2,'%',1) + kpi('เซลล์ท่อ > 3 ม.', f.p3,'%',1));
+  drawSpark();
+}
+function loadFrame(i){
+  const f = F[i], key = 'event/'+f.file;
+  if(frameCache.has(key)) return Promise.resolve(frameCache.get(key));
+  return new Promise((ok,no)=>{
+    const done=()=>{ const d=window.FLOOD_FRAME&&window.FLOOD_FRAME[key]; if(!d) return no('ไม่พบ vec/anim_event/'+f.file+'.js');
+      frameCache.set(key,d); delete window.FLOOD_FRAME[key]; if(frameCache.size>30) frameCache.delete(frameCache.keys().next().value); ok(d); };
+    const t=document.createElement('script'); t.src='vec/anim_event/'+f.file+'.js';
+    t.onload=()=>{ done(); t.remove(); }; t.onerror=()=>no('ไม่พบ vec/anim_event/'+f.file+'.js');
+    document.head.appendChild(t);
+  });
+}
+function show(){
+  const R = st.R, my = ++reqId, i = fi;
+  $('time').value = i; $('tlabel').textContent = thTime(F[i].time); fill();
+  if(!R || !R.getSource('flood')) return Promise.resolve();
+  R.getSource('pipe').setData(pipeFC(F[i].pv||null));
+  if(st.layer!=='surf'){ for(let k=1;k<=2;k++) if(i+k<F.length) loadFrame(i+k).catch(()=>{}); return Promise.resolve(); }
+  return loadFrame(i).then(fc=>{ if(my!==reqId) return; R.getSource('flood').setData(fc); msg('');
+    for(let k=1;k<=2;k++) if(i+k<F.length) loadFrame(i+k).catch(()=>{}); }).catch(e=>msg(String(e)));
+}
+function setPlay(p){ playing=p; $('play').textContent=p?'❚❚':'▶'; clearTimeout(timer); if(p) tick(); }
+function tick(){
+  if(!playing) return;
+  let n = fi+1; if(n>=F.length){ if(!$('loop').checked){ setPlay(false); return; } n=0; }
+  fi=n; const t0=Date.now();
+  show().then(()=>{ if(playing) timer=setTimeout(tick, Math.max(0, +$('speed').value-(Date.now()-t0))); });
+}
+$('play').onclick = ()=>setPlay(!playing);
+$('prev').onclick = ()=>{ setPlay(false); fi=(fi-1+F.length)%F.length; show(); };
+$('next').onclick = ()=>{ setPlay(false); fi=(fi+1)%F.length; show(); };
+$('time').oninput = e=>{ setPlay(false); fi=+e.target.value; show(); };
+
+/* ---------- กราฟเล็ก: พื้นที่ท่วม หรือ % ท่อเกิน 2 ม. ตามเวลา ---------- */
+function drawSpark(){
+  const c=$('spark'), dpr=window.devicePixelRatio||1, w=c.clientWidth, h=c.clientHeight;
+  c.width=w*dpr; c.height=h*dpr; const g=c.getContext('2d'); g.scale(dpr,dpr); g.clearRect(0,0,w,h);
+  const surf = st.layer==='surf', val = f => surf ? f.wet : f.p2, col = surf ? '#4fa3ff' : '#fdae61';
+  const t = F.map(f=>new Date(f.time.replace(' ','T')).getTime()), t0=t[0], t1=t[t.length-1];
+  const mx=Math.max(...F.map(val))||1, x=v=>4+(w-8)*(v-t0)/(t1-t0), y=v=>h-14-(h-24)*v/mx;
+  g.fillStyle=surf?'rgba(79,163,255,.18)':'rgba(253,174,97,.18)'; g.beginPath(); g.moveTo(x(t0),y(0));
+  F.forEach((f,i)=>g.lineTo(x(t[i]),y(val(f)))); g.lineTo(x(t1),y(0)); g.closePath(); g.fill();
+  g.strokeStyle=col; g.lineWidth=1.5; g.beginPath(); F.forEach((f,i)=>i?g.lineTo(x(t[i]),y(val(f))):g.moveTo(x(t[i]),y(val(f)))); g.stroke();
+  g.strokeStyle='#ffcf6b'; g.beginPath(); g.moveTo(x(t[fi]),2); g.lineTo(x(t[fi]),h-12); g.stroke();
+  g.fillStyle='#9fb0c8'; g.font='10.5px system-ui'; g.textBaseline='bottom';
+  g.fillText(surf ? 'พื้นที่ท่วม (ตร.กม.) สูงสุด '+fmt(mx,1) : 'เซลล์ท่อที่น้ำเกิน 2 ม. (%) สูงสุด '+fmt(mx,1), 4, 11);
+  g.textBaseline='alphabetic'; g.fillText(thTime(F[0].time).replace(/ \d{4}/,''),4,h-2);
+  const e=thTime(F[F.length-1].time).replace(/ \d{4}/,''); g.fillText(e,w-4-g.measureText(e).width,h-2);
+}
+$('spark').onclick = e=>{ const r=e.target.getBoundingClientRect(); setPlay(false);
+  const t = F.map(f=>new Date(f.time.replace(' ','T')).getTime()), tt = t[0]+(t[t.length-1]-t[0])*(e.clientX-r.left-4)/(r.width-8);
+  fi = t.reduce((b,v,i)=>Math.abs(v-tt)<Math.abs(t[b]-tt)?i:b,0); show(); };
+window.addEventListener('resize', drawSpark);
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'&&e.target.type!=='range') return;
+  if(e.code==='Space'){ e.preventDefault(); $('play').click(); }
+  if(e.key==='ArrowRight'){ e.preventDefault(); $('next').click(); }
+  if(e.key==='ArrowLeft'){ e.preventDefault(); $('prev').click(); }
+});
+st.onReady = show; st.onLayer = show;
+fi = F.reduce((b,f,i)=>f.wet>F[b].wet?i:b,0);   // เริ่มที่เวลาท่วมมากที่สุด
+show();
+})();
+</script>
+</body>
+</html>
